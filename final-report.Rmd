@@ -1,0 +1,647 @@
+---
+title: "Math 218: Final Report"
+subtitle: "FYP"
+author: "Javier Merino and Mauricio Moreno"
+output: pdf_document
+date: "December 8 2022"
+---
+
+```{r packages-data, include = F}
+# libraries
+webshot::install_phantomjs(force = T)
+library(leaps)
+library(fastDummies)
+library(glmnet)
+library(dplyr)
+library(tidyverse)
+library(geojsonio)
+library(rjson)
+library(leaflet)
+library(geojsonio)
+library(rjson)
+library(remotes)
+library(readr)
+library(sf)
+library(leaflet)
+library(leaflet.extras)
+library(dbscan)
+library(geosphere)
+library(magrittr)
+library(rgdal)
+library(geojsonio)
+library(leaflet)
+
+#Data 
+
+
+listings <- read.csv("Data/listings.csv")
+listings<- listings[-12134,] 
+listingstest<- listings
+listings_raw <- listings[,-c(2:9,11:12, 14:15, 20:23, 28, 30, 33, 36, 42:47, 50:56, 69)]
+listings_raw <- listings_raw[ , -which(names(listings_raw) %in%
+c("amenities","host_since","first_review","last_review","host_verifications","c
+alculated_host_listings_count_entire_homes","calculated_host_listings_count_pri
+vate_rooms","calculated_host_listings_count_shared_rooms"
+,"neighbourhood_cleansed","bathrooms_text"))]
+data_desc <- read.csv("Data/DataDesc - Sheet1.csv")
+listings_raw$price <- as.numeric(gsub("[\\$,]", "", listings$price))
+listings_raw$host_acceptance_rate <- as.numeric(gsub("[\\%,]", "", listings$host_acceptance_rate))
+listings_raw$host_response_rate <- as.numeric(gsub("[\\%,]", "", listings$host_response_rate))
+
+
+```
+
+```{r, echo=FALSE}
+na_count <-sapply(listings_raw, function(x) sum(length(which(is.na(x))))) 
+id<- colnames(listings_raw)
+na_count <- data.frame(na_count,id)
+
+
+PercNa<- na_count %>%
+mutate(PercentNa = (na_count/nrow(listings))*100)
+
+PercNa <- PercNa %>%
+ filter(PercentNa >=2)%>%
+  na.omit()%>%
+ggplot(.,aes(x=PercentNa,y=id))+ geom_bar(stat="identity")
+
+
+listings <- na.omit(listings_raw, T)
+
+outliers <- boxplot(listings$price, plot=FALSE)$out
+x<- listings
+x<- listings[-which(listings$price %in% outliers),]
+
+x <- x[,-c(1,2)]
+```
+
+# 1.Introduction
+
+## 1.1 Data
+
+The dataset we are using is Airbnb listings data from Inside Airbnb with variables on info that is shared in a room listing; detailed description of listings dataset below. The data was collected via publicly available data from Airbnb itself. One limitation so far is that the date represented by the data for listing prices is from a single day so we do not have time-series data for analysis. All the data collected was scraped on Sept. 22, 2022, so this is hopefully a good snapshot as to the trends we will explore between listing/host factors and listing price. Another limitation that we are noticing is that cleaning fees are not included in the data which many time is a determining factor in booking rates.
+
+Data Source: Get the Data. (2022). Insideairbnb.com. <http://insideairbnb.com/get-the-data>
+
+## 1.2 Response variable of interest
+
+Price is our response variable of interest from the listing data. In this case, price is measured as how many pesos (\$MXN) per night per listing. Because our analysis focuses more on the point of view from an Airbnb host, we are interested in what factors are associated with price increase/decrease in a particular market (Mexico City).
+
+## 1.3 Research Question
+
+"What are the best predictors of price for Airbnb listings in Mexico City?"
+
+## 1.4 Supervised Learning Methods
+
+      -Best Subset Selection
+      -Forward Stepwise Selection
+      -Backwards Stepwise Selection
+      -Lasso
+
+## 1.5 Packages
+
+library(tidyverse) library(glmnet) library(fastDummies) library(geojsonio) library(rjson) library(leaflet) library(remotes) library(readr) library(sf) library(leaflet.extras) library(dbscan) library(geosphere) library(magrittr) library(rgdal)
+
+\newpage
+
+## 2.EDA
+
+### 2.1 Box plots
+
+Boxplots were generated for each of three variables that we thought would be important - the type of room, host rating, and total accommodation size. All boxplots revealed expected trends: increased accommodation -\> increased listing price, increased host rating -\> increased listing price, more private listings -\> increased listing price.
+
+```{r, echo=FALSE}
+
+x$accommodates <- factor(as.character(x$accommodates), 
+                            levels=as.character(c(1:50)))
+
+boxplot_accommodates <- ggplot(x, aes(accommodates, price)) +
+  geom_boxplot(aes(fill = accommodates)) + 
+  scale_y_log10() + 
+  labs(title = "Price by Total Accommodation", x= "Total Accomodation", y= "Price",
+       fill = "accommodates", 
+       subtitle = "red line indicate average price") + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  geom_hline(yintercept = mean(x$price), color = "red", linetype = 5) +
+  theme(legend.position="none")
+
+boxplot_roomtype <- ggplot(x, aes(room_type, price)) +
+  geom_boxplot(aes(fill = room_type)) +
+  scale_y_log10() +
+  labs(title = "Price by Room Type", x= "Room Type", y= "Price", fill = "Room 
+       Type",
+      subtitle = "red line indicate average price") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_hline(yintercept = mean(x$price), color = "red", linetype = 5) +
+  theme(legend.position="none")
+
+x <- x %>%
+  mutate(ratings_round = round(x$review_scores_rating))
+
+boxplot_reviews <- ggplot(x, aes(as.character(ratings_round), price)) +
+  geom_boxplot(aes(fill = as.character(ratings_round))) +
+  scale_y_log10() +
+  labs(title = "Price by Airbnb Rating", x= "Rating", y= "Price",
+      subtitle = "red line indicate average price") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_hline(yintercept = mean(x$price), color = "red", linetype = 5) +
+  theme(legend.position="none")
+
+
+```
+
+#### 2.1.1 Accommodates
+
+In this series of boxplots we are noticing that as total accommodation increases for listings, so do the max and median prices. We also notice larger spreads middle 50% of prices per accommodation size for those that accommodate for 9+ guests.
+
+```{r echo=FALSE}
+show(boxplot_accommodates)
+```
+
+\newpage
+
+#### 2.1.2 Rating
+
+In this series of boxplots we are noticing that as host rating increases, so do the the max and median prices for their listings. The spread of the middle 50% of prices per listing remain consistent regardless of rating.
+
+```{r echo=FALSE}
+show(boxplot_reviews)
+```
+
+\newpage
+
+#### 2.1.3 Room Type
+
+In this series of boxplots we are noticing that more private listings are more expensive than shared rooms. The spread of middle 50% listing prices for Hotel rooms is much greater than the other three room-type listings.
+
+```{r echo=FALSE}
+ show(boxplot_roomtype)
+```
+
+\newpage
+
+### 2.2 Heat map leaflet price
+
+A leaflet map was generated, displaying all the Airbnb listings in the map of Mexico city to explore geographical influence in price. The solid blue lines are the median longitude and latitude to show where listings are clustered about.
+
+```{r, echo=FALSE, warning=FALSE, include=FALSE}
+mexicocitycounties <- rgdal::readOGR("Data/neighbourhoods.geojson") 
+```
+
+```{r, echo=FALSE}
+lat <- rep(NA,2)
+long <- rep(NA,2)
+
+medianlongdf <- data.frame(cbind(lat,long))
+colnames(medianlongdf) <- c("latitude","longitude")
+medianlongdf[,2] <- -99.17
+medianlongdf[,1] <- c(19,20)
+
+medianlatdf <- data.frame(cbind(lat,long))
+colnames(medianlatdf) <- c("latitude","longitude")
+medianlatdf[,2] <- c(-97,-101)
+medianlatdf[,1] <- 19.42
+
+```
+
+```{r , echo=FALSE, warning=FALSE, include=FALSE}
+
+listingsleaflet <- na.omit(listings_raw, T)
+
+outliers <- boxplot(listingsleaflet$price, plot=FALSE)$out
+listingsleaflet<- listingsleaflet
+listingsleaflet<- listingsleaflet[-which(listingsleaflet$price %in% outliers),]
+
+mybins <- c(1,500,1000,1500,2000,2500,3000)
+my_pal <- colorBin( palette="OrRd", domain=listingsleaflet$price, na.color="transparent", bins=mybins)
+
+map_5<- listingsleaflet %>%
+  leaflet() %>%
+  addTiles() %>%
+  addCircleMarkers(radius = 0.1,
+                   color = ~my_pal(price),
+                   popup = labs) %>%
+  addLegend(pal = my_pal,
+            values = ~price, 
+            title = "Price in MXN")
+map_5 <- map_5 %>% 
+   addProviderTiles(
+    "CartoDB.Positron",
+    group = "CartoDB.Positron"
+  )%>%
+ 
+
+
+  addPolygons(
+    data = mexicocitycounties,
+    # set the color of the polygon
+    color = "red",
+    # set the opacity of the outline
+    opacity = 1,
+    # set the stroke width in pixels
+    weight = 1,
+    # set the fill opacity
+    fillOpacity = 0
+  )%>%
+  addPolylines(data=medianlongdf, lng=~longitude, lat = ~latitude) %>%
+  addPolylines(data=medianlatdf, lng=~longitude, lat = ~latitude) %>%
+  setView(-99.17,19.42,11)
+
+
+
+```
+
+```{r, echo=FALSE}
+map_5
+```
+
+\newpage
+
+### 2.3 Distribution of Price
+
+#### 2.3.1 Right Skewed
+
+The following figure shows the distribution of price.
+
+```{r, echo=FALSE, warning=FALSE}
+
+skewed <- x %>%
+ggplot(.,aes(x=price))+
+  geom_histogram(bins = 20)+ xlim(0, 5000)
+
+skewed
+
+
+```
+
+\newpage
+
+#### 2.3.2 Log Normal Distribution
+
+Upon taking the the log of the price variable, we were able to get a normal distribution of the price responses.
+
+```{r, echo=FALSE, warning=FALSE}
+	
+x<-x%>% 
+  mutate(., logprice= log(price))
+
+x %>%
+ggplot(.,aes(x=logprice))+
+  geom_histogram(bins = 20)+ xlim(3, 10)
+
+```
+
+## 3 Methodology
+
+### 3.1 Statistical learning methods
+
+For all models, we are fitting on the response variable of log(price) of listings.
+
+For Stepwise and Best Subset models:
+
+We decided to use the calculated BIC to determine the best number of variables (predictors) to include for stepwise forward, stepwise backward, and best subset models. We made the decision to use BIC instead of lowest AIC or CP since those two methods yielded inclusion of the majority of total predictors whereas BIC selected for for only 13-16 of the 25 total predictors.
+
+For Lasso: Lasso (least absolute shrinkage and selection operator; also Lasso or LASSO) is a regression analysis method that performs both variable selection and regularization in order to enhance the prediction accuracy and interpretability of the resulting statistical model. The variable selection was determined by our optimal lambda value. Optimal lambda was obtained by performing cross-validation (10 folds, determined by examples executed in hw/lab models) on our data, and selecting the lambda that corresponded with lowest MSE.
+
+We used scaled data for all models since Lasso requires it and we wanted to keep as many factors consistent across the modelling for better interpretation of results. Ridge regression was not considered because it does not perform variable selection and we made an assumption that not all parameters were influential on the response variable of log-price. Results' table will be in results section.
+
+\newpage
+
+## 4 Results
+
+### 4.1 Best Subset
+
+```{r, echo=FALSE, warning=FALSE, include=FALSE}
+x<- x[,-14]
+x<- dummy_columns(x,"host_response_time")
+x<-dummy_columns(x,"host_is_superhost")
+x<-dummy_columns(x,"host_has_profile_pic")
+x<- dummy_columns(x,"host_identity_verified")
+x<- dummy_columns(x,"room_type")
+x<- dummy_columns(x, "instant_bookable")
+
+x <- x[ , -which(names(x) %in%
+c("host_response_time","host_is_superhost","host_has_profile_pic", "host_identity_verified","room_type","instant_bookable"))]
+
+x <- x[,-c(31, 33, 35, 41)]
+
+x <- data.frame(lapply(x, as.numeric))
+x[c(1:25, 27:38)] <- lapply(x[c(1:25, 27:38)], scale)
+x<-x[,-c(10, 12, 15:25)]
+
+```
+
+The following plot shows BIC on the y axis and number of predictors in the x axis. The lowest BIC corresponds to the model with 13 predictors
+
+```{r echo=FALSE, warning=FALSE}
+best_sub_fit <- regsubsets(logprice ~ ., x, nvmax = 26,really.big=F)
+best_summary <-summary(best_sub_fit)
+
+metric_df <- data.frame(BIC = best_summary$bic) %>%
+  mutate(n_vars = 1:22) 
+metric_df %>%
+  pivot_longer(cols = 1, names_to = "statistic", values_to = "value") %>%
+  ggplot(., aes(x = n_vars, y = value)) +
+  geom_point() +
+  geom_line() +
+  facet_wrap(~ statistic, scales = "free")
+
+
+BIC<- apply(metric_df, 2, which.min)
+BIC
+
+
+coefs_bestsub <- sort(coef(best_sub_fit, 13), decreasing = T)
+listsbestsub <- data.frame(coefs_bestsub) %>%
+  rownames_to_column() %>%
+  rename("var" = 1)
+
+
+```
+
+The best variables for predicting airbnb listing price according to the best subset model are:
+
+```{r echo=FALSE, warning=FALSE}
+ slice(listsbestsub, -1)%>%
+    select(var)
+```
+
+The number of predictors decreased from 25 to 13 \newpage
+
+### 4.2 Backwards selection
+
+The following plot shows BIC on the y axis and number of predictors in the x axis. The lowest BIC corresponds to the model with 14 predictors
+
+```{r  echo=FALSE, warning=FALSE}
+Best_subfit1backwards <-regsubsets(logprice ~., data= x, nvmax=25, method = "backward")
+
+Best_summary1backwards<- summary(Best_subfit1backwards)
+
+metric_dfback <- data.frame(BIC = Best_summary1backwards$bic)%>%
+ mutate(n_vars = 1:22)
+
+metric_dfback %>% ## check number of cols
+pivot_longer(cols = 1, names_to = "statistic", values_to = "value") %>%
+ggplot(., aes(x = n_vars, y = value)) +
+geom_point() +
+geom_line() +
+facet_wrap(~ statistic, scales = "free")
+
+
+apply(metric_dfback ,2, which.min)
+
+coefs_backward <- sort(coef(Best_subfit1backwards, 14), decreasing = T)
+listsbackward <- data.frame(coefs_backward) %>%
+  rownames_to_column() %>%
+  rename("var" = 1)
+
+
+```
+
+The best variables for predicting airbnb listing price according to the forward selection model are:
+
+```{r echo=FALSE, warning=FALSE}
+ slice(listsbackward, -1)%>%
+    select(var)
+```
+
+The number of predictors decreased from 25 to 14 \newpage
+
+### 4.3 Forward selection
+
+The following plot shows BIC on the y axis and number of predictors in the x axis. The lowest BIC corresponds to the model with 14 predictors
+
+```{r echo=FALSE, warning=FALSE}
+Best_subfit1forward <- regsubsets(logprice ~., data= x, nvmax=25, method = "forward")
+
+Best_summary1forward<- summary(Best_subfit1forward)
+
+metric_dfforward <- data.frame( BIC = Best_summary1forward$bic)%>%
+ mutate(n_vars = 1:22)
+
+metric_dfforward %>% ## check number of cols
+pivot_longer(cols = 1, names_to = "statistic", values_to = "value") %>%
+ggplot(., aes(x = n_vars, y = value)) +
+geom_point() +
+geom_line() +
+facet_wrap(~ statistic, scales = "free")
+
+apply(metric_dfforward ,2, which.min)
+
+coefs_forward <-  sort(coef(Best_subfit1forward, 14),decreasing = T)
+listsforward <- data.frame(coefs_forward) %>%
+  rownames_to_column() %>%
+  rename("var" = 1)
+
+
+```
+
+The best variables for predicting airbnb listing price according to forward selection model are:
+
+```{r echo=FALSE, warning=FALSE}
+ slice(listsforward, -1)%>%
+    select(var)
+
+```
+
+The number of predictors decreased from 25 to 14
+
+\newpage
+
+### 4.4 Lasso
+
+The following plot shows the lasso coefficients by lambda.
+
+```{r echo=FALSE, warning=FALSE}
+x1 <- model.matrix(logprice ~ ., x)[,-1]
+y <- x$logprice 
+
+set.seed(10)
+
+  grid <- 10^seq(5,-2,length=100 ) #Creating a random sequence (numbers)
+  lasso <- glmnet(x1,y,alpha = 1, lambda = grid) #1 lasso
+  #0 Ridge
+
+  cv_out <- cv.glmnet(x1,y, alpha =1, nfolds = 10)
+  best_lam <- cv_out$lambda.min
+
+
+
+lasso_full <- glmnet(x1,y,alpha = 1, lambda = grid)
+lasso_coef <- predict(lasso_full, type = "coefficients", s = best_lam)[1:25,]
+
+
+lasso_ests <- t(as.matrix(lasso$beta))
+lasso_df <- data.frame(lasso_ests) %>%
+  mutate(lambda = grid) %>%
+  pivot_longer(cols = -lambda, names_to = "variable", values_to ="coefficient")
+
+
+lasso_df %>% 
+ ggplot(., aes(x = lambda, y = coefficient, col = variable))+
+ geom_line() +
+ scale_x_continuous(trans = "log10")+
+  #geom_vline(xintercept = best_lam, color = "red", linetype = "dashed")+
+  ggtitle("Lasso coefficients by lambda") +
+  theme(legend.key.size = unit(0.1, "cm"))
+  
+  
+
+coefs_lasso <- sort(lasso_coef[lasso_coef != 0], decreasing = T)
+
+listslasso <- data.frame(coefs_lasso) %>%
+  rownames_to_column() %>%
+  rename("var" = 1)
+
+
+
+```
+
+The value of the best lambda is the following:
+
+```{r echo=FALSE, warning=FALSE}
+best_lam 
+
+```
+
+The best variables for predicting airbnb listing price according to the lasso model are:
+
+```{r echo=FALSE, warning=FALSE}
+ slice(listslasso, -1)%>%
+    select(var)
+```
+
+The number of predictors decreased from 25 to 16
+
+\newpage
+
+## 5 Discussion
+
+```{r echo=FALSE, warning=FALSE}
+vars <- merge(listsbackward,listsforward, by="var", all=T)
+
+vars <- merge(vars, listslasso, by = "var", all =T)
+
+vars <- merge(vars, listsbestsub, by = "var", all = T)
+
+
+vars<- vars %>%
+  mutate('coefs_backward_per' = ((exp(vars$coefs_backward)-1)*100))
+         
+ vars<- vars %>%        
+  mutate('coefs_forward_per' = ((exp(vars$coefs_forward)-1)*100))
+ vars<- vars %>%
+    mutate('coefs_bestsubset_per' = ((exp(vars$coefs_bestsub)-1)*100))
+ vars<- vars %>%
+      mutate('coefs_lass_per' = ((exp(vars$coefs_lasso)-1)*100))
+ 
+ vars[1, c(6:9)] <- vars[1, c(6:9)]/100
+ 
+ varsfinal <- vars[,c(1, 6:9)]
+  varsfinal1  <- vars[,c(1, 6:7)]
+  varsfinal2   <- vars[,c(1, 8:9)]
+  
+  varsfinal1
+  varsfinal2
+  
+  
+
+```
+
+To better understand and compare across the 4 different approaches for modeling variables and their effects on the response variable log-price, we took the variables of interest from each model and joined them in a single data frame by variable name (inclusive). The resulting data frame demonstrates the shared variables of interest for modeling effects on price for Airbnb listings(If NA it means that the specific model did not include that variable). Aside from showcasing conserved variables, we are also able to see at a glance for which variables are magnitude and sign preserved.
+
+We decided to mutate new columns for our results and exponentiate the coefficients, subtract one from that value, and multiply by 100. This is due to literature on how to interpret log transformations. The result is that we can now interpret changes in standard deviations of one variable causing a percent change in the response variable price.
+
+For example:
+
+The interpretation of the coefficient of the variable accommodates will be the following.
+
+**Best Subset**
+
+For every increase in 1 standard deviations of the variable accommodates it will cause a 41.78% percent increase in the response variable price.
+
+**Forward Selection**
+
+For every increase in 1 standard deviations of the variable accommodates it will cause a 41.88% percent increase in the response variable price.
+
+**Backward Selection**
+
+For every increase in 1 standard deviations of the variable accommodates it will cause a 26.4% percent increase in the response variable price.
+
+**Lasso**
+
+For every increase in 1 standard deviations of the variable accommodates it will cause a 18.66% percent increase in the response variable price.
+
+The top 11 best predictors, those kept in the 4 models are:
+
+```{r echo=FALSE}
+Bestpredictors <- na.omit(varsfinal)
+Bestpredictors <- Bestpredictors[-1,1]
+
+Bestpredictors
+
+```
+
+\newpage
+
+### 5.1 Advice to Airbnb Hosts and Guest in Mexico City
+
+#### 5.1.1 If you want to increase the price of your listings:
+
+Create listings with high carrying capacity (accommodates, beds, bedrooms)
+
+Respond fast, within an hour or few hours
+
+Incentivize your guests to rate your listing
+
+#### 5.1.2 If you want to find a cheaper listing:
+
+Holding all other factors constant, cheaper listings are expected to be South-East of downtown Mexico City.
+
+Based on the coefficients of latitude and longitude
+
+**Best Subset**
+
+*-Latitude* For every increase in 1 standard deviations of the variable Latitude it will cause a 8.4% percent increase in the response variable price.
+
+*-Longitude* For every increase in 1 standard deviations of the variable longitude it will cause a 13.74% percent increase ( increase because longitude is negative, and the coefficient is also negative ) in the response variable price.
+
+**Backwards selection**
+
+*-Latitude* For every increase in 1 standard deviations of the variable Latitude it will cause a 6.1% percent increase in the response variable price.
+
+*-Longitude* For every increase in 1 standard deviations of the variable longitude it will cause a 12.4% percent increase ( increase because longitude is negative, and the coefficient is also negative ) in the response variable price.
+
+**Forward selection**
+
+*-Latitude* For every increase in 1 standard deviations of the variable Latitude it will cause a 8.37% percent increase in the response variable price.
+
+*-Longitude* For every increase in 1 standard deviations of the variable longitude it will cause a 13.73% percent increase ( increase because longitude is negative, and the coefficient is also negative ) in the response variable price.
+
+**Lasso**
+
+*-Latitude* For every increase in 1 standard deviations of the variable Latitude it will cause a 5.55% percent increase in the response variable price.
+
+*-Longitude* For every increase in 1 standard deviations of the variable longitude it will cause a 11.39% increase ( increase because longitude is negative, and the coefficient is also negative) decrease in the response variable price.
+
+\newpage
+
+All our 4 models agree that:
+
+Listings with a higher Latitude, more to the north have a higher price.
+
+Listings with a higher Longitude, more to the west have a higher price. (The coefficient is negative because the longitude in our data set has a negative sign)
+
+This is confirmed in our EDA map displaying the price of airbnb listings in mexico city. More expensive airbnbs are in the North West. Cheaper airbnbs are located in the South East part of Mexico City
+
+```{r, echo=FALSE}
+map_5
+```
+
+### 5.2 Limitations
+
+Some limitations that we experienced were with respect to what data was available, and how we transformed the response variable. As stated in the data section, we did not use time series data but rather used data scraped on a single day in September. Because of that, we could not see if variables had effects over time which is something that we would expect - especially with varying trends in neighborhood preferences. Another limitation of our scope was that we were measuring the response as log-price. Since we made that transformation in order to proceed with the Lasso method, we decided to use that scaled measure for the other three models. Doing so skews and complicates interpretation of the coefficients.
+
+### 5.3 Areas of further research
+
+For future research on this topic with this data, we would like to start off by first limiting our variables of interest. We could do this by first creating a correlation matrix to determine which factors are more heavily correlated with each other. By conducting this analysis, we could remove certain variables if others explain the same "idea" better (e.g. choosing between beds vs accommodates variables). Another good method that we may wish to implement is the use of a tree for clustering. By doing so, we could get a quick overlook as to which variables are best for determining clustering between low, medium, and high priced listings. From those, we could determine which variables maybe good to look into, and if a clustering approach may be better than a one that assumes a linear relationship (i.e. what we completed in this analysis). Another area that we may want to consider for further research is using external data on property prices, time series data on tourism, comparing across certain dates of interest (like holidays), etc. and their influence on Airbnb listing prices in Mexico City.
