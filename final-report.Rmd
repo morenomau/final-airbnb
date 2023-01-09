@@ -1,9 +1,11 @@
 ---
-title: "Math 218: Final Report"
-subtitle: "FYP"
+title: 'Math 218: Final Report'
 author: "Javier Merino and Mauricio Moreno"
-output: pdf_document
 date: "December 8 2022"
+output:
+  html_document:
+    df_print: paged
+subtitle: FYP
 ---
 
 ```{r packages-data, include = F}
@@ -358,6 +360,7 @@ listsbestsub <- data.frame(coefs_bestsub) %>%
 
 
 ```
+\newpage
 
 The best variables for predicting airbnb listing price according to the best subset model are:
 
@@ -397,6 +400,7 @@ listsbackward <- data.frame(coefs_backward) %>%
 
 
 ```
+\newpage
 
 The best variables for predicting airbnb listing price according to the forward selection model are:
 
@@ -435,6 +439,7 @@ listsforward <- data.frame(coefs_forward) %>%
 
 
 ```
+\newpage
 
 The best variables for predicting airbnb listing price according to forward selection model are:
 
@@ -496,6 +501,7 @@ listslasso <- data.frame(coefs_lasso) %>%
 
 
 ```
+\newpage
 
 The value of the best lambda is the following:
 
